@@ -1,0 +1,175 @@
+%function optimize_HemeProd
+current   = pwd;
+hemeModel = getHeme_ecYeastGEM; 
+tol       = 1E-12;
+OE        = 2;
+growthDeffect = 0.5;
+%% clone GECKO
+%git ('clone https://github.com/SysBioChalmers/GECKO')
+cd GECKO
+git checkout feat/add_FSEOF_utilities
+%Set minimal media
+cd geckomat/kcat_sensitivity_analysis
+hemeModel = changeMedia_batch(hemeModel,'D-glucose exchange (reversible)');
+%% Run FSEOF to find gene candidates
+cd ../utilities/ecFSEOF
+newFolder = '../../../../../results';
+mkdir(newFolder)
+file1     = [newFolder '/genesResults.txt'];
+file2     = [newFolder '/rxnsResults.txt'];
+rxnTarget = 'r_s3714_Ex';
+cSource   = 'D-glucose exchange (reversible)';
+alphaLims = [0.2 0.8];
+Nsteps    = 16;
+
+results              = run_ecFSEOF(hemeModel,rxnTarget,cSource,alphaLims,Nsteps,file1,file2);
+genes                = results.genes;
+geneShorts           = results.geneNames;
+actions              = results.k_genes;
+actions(actions<0.5) = 0;
+actions(actions>1)   = 1;
+actions              = logical(actions);
+%Identify candidate genes in model enzymes
+[iA,iB]    = ismember(genes,hemeModel.enzGenes);
+candidates = {};
+for i=1:numel(iB)
+    if iB(i)>0
+        candidates = [candidates; hemeModel.enzymes(iB(i))];
+    else
+        candidates = [candidates; {''}];
+    end
+end
+candidates =table(genes,candidates,geneShorts,actions,'VariableNames',{'genes' 'enzymes' 'shortNames' 'actions'});
+%% Get constraints values
+cd (current)
+tempModel   = hemeModel;
+heme_yield  = [];
+%Get relevant rxn indexes
+targetIndx  = find(strcmpi(tempModel.rxnNames,'heme exchange'));
+GUR_indx    = find(strcmpi(tempModel.rxnNames,'D-glucose exchange (reversible)'));
+growth_indx = find(strcmpi(tempModel.rxnNames,'growth'));
+prot_indxs  = find(contains(tempModel.rxnNames,'prot_'));
+pool_indxs  = prot_indxs(end);
+prot_indxs  = prot_indxs(1:end-1);
+%Get max growth
+tempModel.c(growth_indx) = 1;
+sol       = solveLP(tempModel,1);
+WT_Growth = sol.x(growth_indx);
+%Fix suboptimal growth
+tempModel.lb(growth_indx) = (1-growthDeffect)*WT_Growth;
+%Max heme production
+tempModel = setParam(tempModel, 'obj', targetIndx, +1);
+%Fix max heme production
+sol                      = solveLP(tempModel,1);
+WT_prod                  = sol.x(targetIndx);
+tempModel.lb(targetIndx) = (1-tol)*sol.x(targetIndx);
+WT_GUR    = sol.x(GUR_indx);
+
+%Get parsimonious proteome allocation solution
+tempModel = setParam(tempModel, 'obj', pool_indxs, -1);
+sol       = solveLP(tempModel,1);
+pUsages   = sol.x(prot_indxs);
+WT_GUR    = sol.x(GUR_indx);
+
+% %Get minimal GUR
+% tempModel = setParam(tempModel, 'obj', GUR_indx, -1);
+% sol       = solveLP(tempModel,1);
+% WT_GUR    = sol.x(GUR_indx);
+% pUsages   = sol.x(prot_indxs);
+
+%Fix optimal GUR
+tempFVA       = setParam(tempModel, 'lb', GUR_indx, (1-tol)*WT_GUR);
+tempFVA       = setParam(tempFVA, 'ub', GUR_indx, (1+tol)*WT_GUR);
+WT_bio_yield  = WT_Growth/(0.18*WT_GUR);
+WT_prod_yield = WT_prod/WT_GUR;
+%% Run FVA for all enzyme usages subject to fixed GUR and Grates
+ranges    = [];
+minUsages = []; 
+maxUsages = []; 
+FVAprots  = candidates.enzymes;
+candidateUsages = [];
+for i=1:length(FVAprots)
+    if ~isempty(FVAprots{i})
+        rxnIndx = find(contains(tempFVA.rxnNames,FVAprots{i}));
+        enzIndx = find(strcmpi(tempFVA.enzymes,FVAprots{i}));
+        %Fix parsimonious usages
+        %tempFVA = setParam(tempModel, 'lb', prot_indxs, (1-tol)*pUsages);
+        %tempFVA = setParam(tempFVA, 'ub', prot_indxs, (1+tol)*pUsages);
+        %Set i-th enzyme free
+        %tempFVA = setParam(tempFVA, 'lb', rxnIndx, 0);
+        %tempFVA = setParam(tempFVA, 'ub', rxnIndx, Inf);
+        tempFVA = setParam(tempFVA, 'obj', rxnIndx, -1);
+        sol     = solveLP(tempFVA);
+        if ~isempty(sol.f)
+            minFlux   = sol.x(rxnIndx); 
+            tempFVA   = setParam(tempFVA, 'obj', rxnIndx, +1);
+            sol       = solveLP(tempFVA);
+            if ~isempty(sol.f)
+               disp(['Ready with rxn #' num2str(i)])
+               maxFlux = sol.x(rxnIndx); 
+            else
+               maxFlux = nan; 
+            end
+        else
+            disp(['Nooot Ready with rxn #' num2str(i)])
+            minFlux = nan;
+            maxFlux = nan; 
+        end
+        ranges          = [ranges; (maxFlux-minFlux)];
+        minUsages       = [minUsages; minFlux]; 
+        maxUsages       = [maxUsages; maxFlux];
+        candidateUsages = [candidateUsages;pUsages(enzIndx)];
+    else
+        ranges    = [ranges; 0];
+        minUsages = [minUsages; 0]; 
+        maxUsages = [maxUsages; 0];
+        candidateUsages = [candidateUsages;0];
+    end
+end
+%Identify enzymes with "room" for direct overexpression
+for i=1:length(FVAprots)
+    if maxUsages(i)~=0 & actions(i)==1
+        overExp_enzymes(i) = maxUsages(i)>= OEf*candidateUsages(i);
+    else
+        overExp_enzymes(i) = 0; 
+    end
+end
+overExp_enzymes = overExp_enzymes';
+overExp_enzymes = overExp_enzymes*OEf;
+candidates.OE   = overExp_enzymes;
+%Generate table with FVA results
+t = table(candidates.enzymes,minUsages,maxUsages,ranges,candidateUsages,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages'});
+writetable(t,'../results/enzUsageRanges_hemeGenes.txt','Delimiter','\t','QuoteStrings',false);
+%%
+tempModel   = hemeModel;
+%Fix suboptimal growth
+tempModel.lb(growth_indx) = (1-growthDeffect)*WT_Growth;
+%Max heme production
+tempModel = setParam(tempModel, 'obj', targetIndx, +1);
+FoldChanges = [];
+for i=1:height(candidates)
+    gene  = candidates.genes{i};
+    short = candidates.shortNames{i};
+    enzyme   = candidates.enzymes{i};
+    enzUsage = candidateUsages(i);
+    action   = actions(i);
+    OEf      = candidates.OE(i);
+    modifications = {gene action OEf};
+    mutantModel   = getMutant(tempModel,modifications);
+    [mutSolution,flag] = solveECmodel(mutantModel,mutantModel,'pFBA',pool_indxs);
+    if ~isempty(mutSolution)
+        yield = mutSolution(targetIndx)/mutSolution(GUR_indx);
+        FC    = yield/WT_prod_yield;
+    else
+        FC = 0;
+        disp(['Not feasible on gene: ' short])
+    end
+    if FC >1
+            disp([short ' ' num2str(action) num2str(OEf)])
+    end
+    FoldChanges = [FoldChanges; FC];
+end
+validated    = candidates(FoldChanges>1,:);
+validated.FC = FoldChanges(FoldChanges>1);
+validated.FC = (validated.FC-1)*100;
+%end
