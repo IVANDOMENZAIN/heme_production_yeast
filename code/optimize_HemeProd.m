@@ -19,7 +19,7 @@ file1     = [newFolder '/genesResults.txt'];
 file2     = [newFolder '/rxnsResults.txt'];
 rxnTarget = 'r_s3714_Ex';
 cSource   = 'D-glucose exchange (reversible)';
-alphaLims = [0.2 0.8];
+alphaLims = [0.01098 0.04392];
 Nsteps    = 16;
 
 results              = run_ecFSEOF(hemeModel,rxnTarget,cSource,alphaLims,Nsteps,file1,file2);
@@ -55,22 +55,25 @@ prot_indxs  = prot_indxs(1:end-1);
 tempModel.c(growth_indx) = 1;
 sol       = solveLP(tempModel,1);
 WT_Growth = sol.x(growth_indx);
-%Fix suboptimal growth
-tempModel.lb(growth_indx) = (1-growthDeffect)*WT_Growth;
+%Fix suboptimal experimental biomass yield conditions
+Yield = 0.122;
+V_bio = Yield*0.18;
+tempModel.lb(growth_indx) = V_bio;
+tempModel.lb(GUR_indx)    = (1-tol)*1;
+tempModel.ub(GUR_indx)    = (1+tol)*1;
 %Max heme production
 tempModel = setParam(tempModel, 'obj', targetIndx, +1);
 %Fix max heme production
 sol                      = solveLP(tempModel,1);
 WT_prod                  = sol.x(targetIndx);
-tempModel.lb(targetIndx) = (1-tol)*sol.x(targetIndx);
 pUsages                  = sol.x(prot_indxs);
 WT_GUR                   = sol.x(GUR_indx);
 
 %Get parsimonious proteome allocation solution
-tempModel = setParam(tempModel, 'obj', pool_indxs, -1);
-sol       = solveLP(tempModel,1);
-pUsages   = sol.x(prot_indxs);
-WT_GUR    = sol.x(GUR_indx);
+% tempModel = setParam(tempModel, 'obj', pool_indxs, -1);
+% sol       = solveLP(tempModel,1);
+% pUsages   = sol.x(prot_indxs);
+% WT_GUR    = sol.x(GUR_indx);
 
 % %Get minimal GUR
 % tempModel = setParam(tempModel, 'obj', GUR_indx, -1);
@@ -79,9 +82,10 @@ WT_GUR    = sol.x(GUR_indx);
 % pUsages   = sol.x(prot_indxs);
 
 %Fix optimal GUR
-tempFVA       = setParam(tempModel, 'lb', GUR_indx, (1-tol)*WT_GUR);
-tempFVA       = setParam(tempFVA, 'ub', GUR_indx, (1+tol)*WT_GUR);
-WT_bio_yield  = WT_Growth/(0.18*WT_GUR);
+tempFVA       = tempModel;
+tempFVA.lb(targetIndx)    = (1-tol)*WT_prod;
+tempFVA.ub(targetIndx)    = (1+tol)*WT_prod;
+WT_bio_yield  = V_bio/(0.18*WT_GUR);
 WT_prod_yield = WT_prod/WT_GUR;
 %% Run FVA for all enzyme usages subject to fixed GUR and Grates
 ranges    = [];
@@ -130,48 +134,94 @@ end
 %Identify enzymes with "room" for direct overexpression
 for i=1:length(FVAprots)
     if maxUsages(i)~=0 & actions(i)==1
-        overExp_enzymes(i) = maxUsages(i)>= OE*candidateUsages(i);
+        overExp_enzymes(i) = 1;
+        %For those enzymes which flexib
+        if maxUsages(i)< OE*candidateUsages(i)
+            actions(i) = 2;
+        end
     else
         overExp_enzymes(i) = 0; 
     end
 end
-overExp_enzymes = overExp_enzymes';
-overExp_enzymes = overExp_enzymes*OE;
+%%
+%overExp_enzymes = overExp_enzymes';
+overExp_enzymes  = overExp_enzymes*OE;
 %overExp_enzymes(overExp_enzymes>0) = maxUsages(overExp_enzymes>0)./candidateUsages(overExp_enzymes>0);
-candidates.OE   = overExp_enzymes;
+candidates.OE     = overExp_enzymes;
+candidates.usages = candidateUsages;
 %Generate table with FVA results
 t = table(candidates.enzymes,minUsages,maxUsages,ranges,candidateUsages,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages'});
 writetable(t,'../results/enzUsageRanges_hemeGenes.txt','Delimiter','\t','QuoteStrings',false);
 %%
-tempModel   = hemeModel;
-%Fix suboptimal growth
-tempModel.lb(growth_indx) = (1-growthDeffect)*WT_Growth;
+tempModel = hemeModel;
+%Fix suboptimal biomass yield
+tempModel.lb(growth_indx) = V_bio;
+%tempModel.lb(GUR_indx)    = (1-tol)*1;
+%tempModel.ub(GUR_indx)    = (1+tol)*1;
+
 %Max heme production
-tempModel = setParam(tempModel, 'obj', targetIndx, +1);
+tempModel     = setParam(tempModel, 'obj', targetIndx, +1);
+FoldChanges   = [];
+remaining     = candidates;
+genesOpt      = [];
+FoldChanges   = [];
+%Get first genetic modification
+[maxVal,gene] = testAllmutants(candidates,tempModel,GUR_indx,targetIndx,WT_prod_yield);
+%Get top gene associated information
+[mutantModel,I] = getGeneMutant(tempModel,candidates,gene);
+remaining(I,:)  = [];
+genesOpt        = [genesOpt;gene];
+%%
+while ~isempty(remaining.genes)
+    [maxVal,gene,FC]   = testAllmutants(remaining,mutantModel,GUR_indx,targetIndx,WT_prod_yield);
+    if ~isempty(gene)
+        disp(['Optimal target found: ' gene ' FC: ' num2str(FC)])
+        [mutantModel,I] = getGeneMutant(mutantModel,remaining,gene);
+        remaining(I,:)  = [];
+        genesOpt        = [genesOpt;gene];
+        FoldChanges     = [FoldChanges; FC];
+    else
+        remaining.genes = [];
+    end
+end
+
+
+%%
+function [maxVal,gene,FC] = testAllmutants(candidates,tempModel,GUR_indx,targetIndx,WTval)
 FoldChanges = [];
+pool_indxs  = find(contains(tempModel.rxnNames,'D-glucose exchange (reversible)'));
 for i=1:height(candidates)
-    gene  = candidates.genes{i};
-    short = candidates.shortNames{i};
+    gene     = candidates.genes{i};
+    short    = candidates.shortNames{i};
     enzyme   = candidates.enzymes{i};
-    enzUsage = candidateUsages(i);
-    action   = actions(i);
+    enzUsage = candidates.usages(i);
+    action   = candidates.actions(i);
     OEf      = candidates.OE(i);
-    modifications = {gene action OEf};
-    mutantModel   = getMutant(tempModel,modifications);
-    [mutSolution,flag] = solveECmodel(mutantModel,mutantModel,'pFBA',pool_indxs);
+    modifications   = {gene action OEf};
+    mutantModel     = getMutant(tempModel,modifications);
+    [mutSolution,~] = solveECmodel(mutantModel,mutantModel,'pFBA',pool_indxs);
     if ~isempty(mutSolution)
         yield = mutSolution(targetIndx)/mutSolution(GUR_indx);
-        FC    = yield/WT_prod_yield;
+        FC    = yield/WTval;
     else
         FC = 0;
-        disp(['Not feasible on gene: ' short])
-    end
-    if FC >1
-            disp([short ' ' num2str(action) num2str(OEf)])
     end
     FoldChanges = [FoldChanges; FC];
 end
-validated    = candidates(FoldChanges>=1,:);
-validated.FC = FoldChanges(FoldChanges>=1);
-validated.FC = (validated.FC-1)*100;
-%end
+[maxVal,I] = max(FoldChanges);
+if ~(maxVal>1)
+    maxVal = [];
+    gene   = [];
+    FC     = [];
+else 
+    gene = candidates.genes{I};
+    FC   = FoldChanges(I);
+    disp(['candidate gene: ' gene ' FC: ' num2str(FC)])
+end
+end
+%%%
+function [mutantModel,I] = getGeneMutant(tempModel,candidates,gene)
+    I             = find(strcmpi(candidates.genes,gene));
+    modifications = {candidates.genes{I} candidates.actions(I) candidates.OE(I)};
+    mutantModel   = getMutant(tempModel,modifications);
+end
