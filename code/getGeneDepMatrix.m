@@ -36,14 +36,13 @@ for i=1:G
     %Get all vectors that are equal to i-th gene
     for j=1:G
         vectorJ = GM_matrix(:,j);
-        if geneVector == vectorJ
+        if isequal(geneVector,vectorJ)
            EQmatrix(j,i) = 1;
         end
     end
 end
-EQmatrix = logical(EQmatrix);
 %Get genes that are totally independent
 IndGenes = sum(EQmatrix,2);
-IndGenes(IndGenes==1) = true;
-IndGenes(IndGenes~=1) = false;
+IndGenes(IndGenes==1) = 1;
+IndGenes(IndGenes>1) = 0;
 end
