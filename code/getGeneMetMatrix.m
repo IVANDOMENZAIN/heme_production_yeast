@@ -39,17 +39,17 @@ else
 end
 %Standardize rxnGeneMat
 [~,rxnGeneMat] = standardizeGrRules(model,true);
-%Get metGenesMatrix
-Smat          = model.S;
-RGmat         = rxnGeneMat;
-GeneMetMatrix = logical(Smat)*RGmat;
-GeneMetMatrix = full(abs(sign(GeneMetMatrix)));
 %Avoid enzyme usage reactions and pseudometabolites
-MetsIndxs = find(~contains(model.metNames,'prot_') & ~contains(model.metNames,'pmet_'));
-%Get subset matrix
-GeneMetMatrix = GeneMetMatrix(MetsIndxs,genes);
+MetsIndxs = find(~contains(model.metNames,'prot_'));
+rxnIndxs  = find(~contains(model.rxnNames,'draw_prot_') | ~contains(model.rxns,'_REV'));
+
+Smat      = model.S(MetsIndxs,rxnIndxs);
+RGmat      = rxnGeneMat(rxnIndxs,genes);
+%Get metGenesMatrix
+GeneMetMatrix = abs(sign(Smat))*RGmat;
+GeneMetMatrix = full(GeneMetMatrix);
 %Calculate row and column sums
-metsConectivity  = table(model.metNames(MetsIndxs),model.mets(MetsIndxs),model.metComps(MetsIndxs),sum(GeneMetMatrix,2),'VariableNames',{'metNames' 'mets' 'metComps' 'genes_number'});
-genesConectivity = table(model.genes(iB),model.geneShortNames(iB),sum(GeneMetMatrix,1)','VariableNames',{'genes' 'short_names' 'mets_number'});
+metsConectivity  = table(model.metNames(MetsIndxs),model.mets(MetsIndxs),model.metComps(MetsIndxs),sum(logical(GeneMetMatrix),2),'VariableNames',{'metNames' 'mets' 'metComps' 'genes_number'});
+genesConectivity = table(model.genes(iB),model.geneShortNames(iB),sum(logical(GeneMetMatrix),1)','VariableNames',{'genes' 'short_names' 'mets_number'});
 end
 
