@@ -1,5 +1,5 @@
 function [metGeneGraph,metNames] = getMGgraph(GeneMetMatrix,mets,model,geneShorts,MWs,algorithm)
-exclude   = {'ATP' 'ADP' 'AMP' 'GTP' 'GDP' 'GMP' 'CTP' 'CMP' 'CDP' 'oxygen' 'acetyl-CoA' 'acetaldehyde' 'ethanol' ...
+exclude   = {'ATP' 'ADP' 'AMP' 'GTP' 'GDP' 'GMP' 'CTP' 'CMP' 'CDP' 'oxygen' ...
              'dGDP' 'dCDP' 'dATP' 'dGTP' 'dTTP' 'dTMP' 'dGMP' 'dAMP' 'dADP' 'dUMP' 'dUTP' 'diphosphate' 'phosphate' 'H+' 'H2O' 'NADPH' 'NADP(+)' 'NADH' 'NAD' 'pmet_' 'carbon dioxide' 'coenzyme A'};
 tempGMmat = GeneMetMatrix;
 [~,iB]    = ismember(mets,model.mets);
@@ -46,16 +46,16 @@ for i=1:G
         metGeneGraph(metIndxs,index) = i;%metGeneGraph(metIndxs,index)+Mweigth;
     end
 end
-
-metGeneGraph = graph(metGeneGraph,mets,'OmitSelfLoops');
+%Exclude unconnected nodes from graph
+toKeep = sum(logical(metGeneGraph),2)>1;
+metGeneGraph = metGeneGraph(toKeep,toKeep);
+metGeneGraph = graph(metGeneGraph,mets(toKeep),'OmitSelfLoops');
 if ~isempty(algorithm)
     figure                 % Creates a figure
     set(gca,'FontSize',26) % Creates an axes and sets its FontSize to 18
     p = plot(metGeneGraph);
-    labelnode(p,1:height(metGeneGraph.Nodes),metNames)
-    layout(p,'force')
-    length(edgeNames)
-    numedges(metGeneGraph)
+    labelnode(p,1:height(metGeneGraph.Nodes),metNames(toKeep))
+    layout(p,algorithm)
     labeledge(p,1:numedges(metGeneGraph),(metGeneGraph.Edges.Weight))
 end
 end
