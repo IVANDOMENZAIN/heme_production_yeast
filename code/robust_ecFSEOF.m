@@ -11,18 +11,22 @@ git checkout feat/add_FSEOF_utilities
 %Get model parameters
 cd geckomat
 parameters = getModelParameters;
-c_source   = parameters.c_source;
 bioRXN     = parameters.bioRxn;
-% Run FSEOF to find gene candidates
-Nsteps    = 16;
-alphaLims = [0.5*expYield 2*expYield];
-cd utilities/ecFSEOF
-mkdir('results')
+c_source   = parameters.c_source;
+%Parameters for FSEOF method
+Nsteps     = 16;
+alphaLims  = [0.5*expYield 2*expYield];
+%output files for genes and rxn targets
 file1   = 'results/genesResults_ecFSEOF.txt';
 file2   = 'results/rxnsResults_ecFSEOF.txt';
+% Run FSEOF to find gene candidates
+cd utilities/ecFSEOF
+mkdir('results')
 results    = run_ecFSEOF(model,rxnTarget,c_source,alphaLims,Nsteps,file1,file2);
 genes      = results.genes;
-disp(['There are ' num2str(length(genes)) ' targets'])
+disp(['ecFSEOF yielded ' num2str(length(genes)) ' targets'])
+disp(' ')
+%Format results table
 geneShorts = results.geneNames;
 actions    = results.k_genes;
 actions(actions<0.5) = 0;
@@ -42,11 +46,15 @@ for i=1:numel(iB)
 end
 %Get results files structures
 candidates = table(genes,candidates,geneShorts,MWeigths,actions,results.k_genes,'VariableNames',{'genes' 'enzymes' 'shortNames' 'MWs' 'actions' 'k_scores'});
-candidates = candidates(((candidates.actions==1)|(candidates.actions==0)),:); 
+% Keep top results
+%candidates = candidates(((candidates.actions==1)|(candidates.actions==0)),:); 
+toKeep = find((candidates.k_scores>=thresholds(2)|candidates.k_scores<=thresholds(1)));
+candidates = candidates(toKeep,:);
 cd (current)
-disp('First filter OE or DR?')
-disp(['There are ' num2str(height(candidates)) ' targets'])
 writetable(candidates,[resultsFolder '/candidates_ecFSEOF.txt'],'Delimiter','\t','QuoteStrings',false);
+disp(['Remove targets ' num2str(thresholds(1)) ' < K_score < ' num2str(thresholds(2))])
+disp([num2str(height(candidates)) ' gene targets remain'])
+disp(' ')
 % Get constraints values
 tempModel   = model;
 %Get relevant rxn indexes
@@ -70,17 +78,19 @@ tempModel.ub(targetIndx) = (1+tol)*WT_prod;
 %Calculate WT yields
 WT_prod_yield = WT_prod/WT_CUR;
 % Run FVA for all enzyme usages subject to fixed CUR and Grates
-disp(' ')
 disp('Running enzyme usage variability analysis')
 FVAtable = enzymeUsage_FVA(tempModel,candidates.enzymes);
 candidateUsages = FVAtable.pU;
 minUsages       = FVAtable.minU;
 maxUsages       = FVAtable.maxU;
-% Identify enzymes with "room" for direct overexpression
+%Classify overexpression types
 for i=1:length(candidates.enzymes)
+    %Enzymes that are more tightly constrained are classified as candidates
+    %for overexpression by modification on Kcats
     if maxUsages(i)~=0 && candidates.actions(i)>0
         candidates.actions(i) = 1;
-        %For those enzymes which flexib
+        %Enzymes for "room" for direct overexpression (operate on enzyme
+        %usage lb)
         if maxUsages(i)< OE*candidateUsages(i)
             candidates.actions(i) = 2;
         end 
@@ -100,7 +110,8 @@ tempMat  = table2array(t(:,2:3));
 unused   = find(sum(tempMat,2)==0);
 toRemove = intersect(unused,find(candidates.actions>0));
 candidates(toRemove,:) = [];
-disp(['There are ' num2str(height(candidates)) ' candidates'])
+disp('Discard enzymes with lb=ub=0')
+disp([num2str(height(candidates)) ' gene targets remain'])
 % Mechanistic validations of FSEOF results
 disp(' ')
 disp('Mechanistic validation of results')
@@ -115,34 +126,38 @@ tempModel = setParam(tempModel,'obj',targetIndx,+1);
 %Discard genes with a negative impact on production yield
 candidates.foldChange = FCs; 
 candidates            = candidates(validated,:);
-disp(['There are ' num2str(height(candidates)) ' candidates'])
+disp('Discard gene modifications with a negative impact on product yield')
+disp([num2str(height(candidates)) ' gene targets remain'])
+disp(' ')
 writetable(candidates,[resultsFolder '/candidates_mech_validated.txt'],'Delimiter','\t','QuoteStrings',false);
-% Assess linear dependencies
-%Get rxn mets network
+% Assess genes redundancy
+%Get Genes-metabolites network
 [GeneMetMatrix,~,Gconect] = getGeneMetMatrix(tempModel,candidates.genes);
-%Get linearly independent genes from GeneMetMatrix
-[LI_Genes,G2Gmatrix,~] = getGeneDepMatrix(GeneMetMatrix);
+%Get independent genes from GeneMetMatrix
+[indGenes,G2Gmatrix,~] = getGeneDepMatrix(GeneMetMatrix);
 %Append algebraic results to candidates table
-candidates.LI          = LI_Genes;
+candidates.unique = indGenes;
 candidates.conectivity = Gconect.mets_number;
-% Keep top results
-toKeep            = find((candidates.k_scores>=thresholds(2)|candidates.k_scores<=thresholds(1)));
-candidates        = candidates(toKeep,:);
-GeneMetMatrix     = GeneMetMatrix(:,toKeep);
-G2Gmatrix         = G2Gmatrix(toKeep,toKeep);
 [~,groups]        = getGenesGroups(G2Gmatrix,candidates.genes);
 candidates.groups = groups;
-disp(['There are ' num2str(height(candidates)) ' candidates'])
+
 % Rank candidates by priority
-%%% 1st. LI=1 OEs with both min and pUsage>0 & Deletions with pUsage=0
+disp('Ranking gene targets by priority level:')
+disp('  1.- Candidates for OE with pUsage>0')
+disp('  1.- Candidates for del with pUsage=0 and maxUsage>0')
+disp('  2.- Isoenzymes with the lowest MW for a metabolic rxn')
+disp(' ')
 priority = zeros(height(candidates),1);
-%LI Enzymes that are necesarily used
-cond1    = (candidates.actions>0 & candidates.pUsage>0 & candidates.minUsage>0);
-%LI enzymes that are not used
-cond2    = (candidates.actions==0 & candidates.pUsage==0 & candidates.maxUsage>0);
-indexes  = (candidates.LI==1 & (cond2 | cond1));
+%%% 1st. unique=1 OEs with both min and pUsage>0 & Deletions with pUsage=0
+%unique Enzymes that are necesarily used
+cond1 = (candidates.actions>0 & candidates.pUsage>0 & candidates.minUsage>0);
+%unique enzymes that are not used in a parsimonious simulation
+cond2   = (candidates.actions==0 & candidates.pUsage==0 & candidates.maxUsage>0);
+indexes = (candidates.unique==1 & (cond2 | cond1));
 priority(indexes) = 1; 
-%%% 2nd. LI=0, for OEs pick the enzyme with the lowest MW for each group 
+%%% 2nd. unique=0, for OEs pick the enzyme with the lowest MW for each group, these 
+% are usually isoenzymes, therefore the lowest protein burden impact is
+% desired
 for i=1:max(candidates.groups)
     %Find group genes
     groupIndxs = find(candidates.groups==i);
@@ -170,17 +185,22 @@ end
 candidates.priority = priority;
 %Keep priority genes and sort them accordingly
 candidates = candidates(priority>0,:);
-disp(['There are ' num2str(height(candidates)) ' candidates'])
+disp('Discard genes with priority level = 0 ')
+disp([num2str(height(candidates)) ' gene targets remain'])
+disp(' ')
 candidates = sortrows(candidates,'priority','ascend');
 writetable(candidates,[resultsFolder '/candidates_priority.txt'],'Delimiter','\t','QuoteStrings',false);
 % get optimal strain according to priority candidates
-[~,filtered,~,iB] = getOptimalStrain(tempModel,candidates,[targetIndx CUR_indx],CS_MW);
+disp('Constructing optimal strain')
+[~,filtered] = getOptimalStrain(tempModel,candidates,[targetIndx CUR_indx],CS_MW);
 [mutantStrain,filtered,] = getOptimalStrain(tempModel,filtered,[targetIndx CUR_indx],CS_MW);
 cd (current)
 actions = cell(height(filtered),1);
 actions(filtered.actions==0)= {'deletion'};
 actions(filtered.actions>0) = {'OE'};
 filtered.actions = actions;
+disp([num2str(height(filtered)) ' gene targets remain'])
+disp(' ')
 writetable(filtered,[resultsFolder '/compatible_genes_results.txt'],'Delimiter','\t','QuoteStrings',false);
 origin = 'GECKO/geckomat/utilities/ecFSEOF/results/*';
 copyfile(origin,resultsFolder)

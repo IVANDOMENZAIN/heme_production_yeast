@@ -39,7 +39,7 @@ for i=[1 2 3]
                 optStrain  = tempMutant;
                 previousFC = FC;
                 counter = counter+1;
-                disp(['Ready with gene #' num2str(counter) ' (' short{1} ')' '  FC:' num2str(FC)])
+                %disp(['Ready with gene #' num2str(counter) ' (' short{1} ')' '  FC:' num2str(FC)])
             end
         else
             FC = 0;
