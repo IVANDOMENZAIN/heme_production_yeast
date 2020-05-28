@@ -56,7 +56,7 @@ elseif strcmpi(method,'pFBA')
             mutSolution = mutSolution.x;
         end
     else 
-        mutSolution = [];
+        mutSolution = zeros(length(mutant.rxns),1);
     end
 end
 
