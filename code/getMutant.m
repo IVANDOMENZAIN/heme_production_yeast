@@ -27,7 +27,7 @@ function mutantModel = getMutant(model,modifications,enzUsage,message)
 %
 %   Usage: mutantModel = getMutant(model,modifications,enzUsage,message)
 %
-%   Ivan Domenzain.     Last edited 2019-10-12
+%   Ivan Domenzain.     Last edited 2019-11-25
 %           
 
 if nargin<4
@@ -38,25 +38,33 @@ if nargin<4
 end
 
 mutantModel = model;
-genes2mod = modifications(:,1);
-actions = modifications(:,2);
-OE = modifications(:,3);
-
+genes2mod   = modifications(:,1);
+actions     = modifications(:,2);
+OE          = modifications(:,3);
+pool_index  = (strcmpi(model.rxnNames,'prot_pool_exchange'));
 for i=1:length(genes2mod)
-    gene = genes2mod{i};
-    action = actions{i};
+    gene     = genes2mod{i};
+    action   = actions{i};
     OEFactor = OE{i};
+    gene2modIndex = find(strcmpi(mutantModel.enzGenes,gene));
+    %If the gene to overexpress has an associated enzyme then
+    %"overexpress" the enzyme usage pseudoRxn Upper bound
+    if ~isempty(gene2modIndex)
+        enzyme  = mutantModel.enzymes(gene2modIndex);
+    else
+        enzyme = [];
+    end
     %Deletion mutants
     switch action
         case 0
             mutantModel = removeGenes(mutantModel,gene,false,false,false);
+            if ~isempty(enzUsage) && ~isempty(gene2modIndex)
+                releasedMass = enzUsage*mutantModel.MWs(gene2modIndex);
+                mutantModel.ub(pool_index) = mutantModel.ub(pool_index)+releasedMass;
+            end
         %Overexpression mutants
         case 1
-            gene2modIndex = find(strcmpi(mutantModel.enzGenes,gene));
-            %If the gene to overexpress has an associated enzyme then
-            %"overexpress" the enzyme usage pseudoRxn Upper bound
-            if ~isempty(gene2modIndex)
-                enzyme  = mutantModel.enzymes(gene2modIndex);
+            if ~isempty(enzyme)
                 %find enzyme exchange or draw reaction
                 enzRxn = find(contains(mutantModel.rxnNames,enzyme));
                 %If the enzRxn is bounded "overexpress" the UB
@@ -80,16 +88,16 @@ for i=1:length(genes2mod)
                 end
             end
         case 2
-            enzName    = ['prot_' enzyme{1}];
-            enzMetIndx = find(strcmpi(mutantModel.metNames,enzName));
-            enzKcats   = find(mutantModel.S(enzMetIndx,:));
-            enzKcats   = enzKcats(1:end-1);
-            mutantModel.S(enzMetIndx,enzKcats) = mutantModel.S(enzMetIndx,enzKcats)./OEFactor;
+            if ~isempty(enzyme)
+                enzName    = ['prot_' enzyme{1}];
+                enzMetIndx = find(strcmpi(mutantModel.metNames,enzName));
+                enzKcats   = find(mutantModel.S(enzMetIndx,:));
+                enzKcats   = enzKcats(1:end-1);
+                mutantModel.S(enzMetIndx,enzKcats) = mutantModel.S(enzMetIndx,enzKcats)./OEFactor;
+            end
         %Change endogenous for Heterologous enzymes
         case 3
-            gene2modIndex = find(strcmpi(mutantModel.enzGenes,gene));
-            if ~isempty(gene2modIndex)
-                enzyme   = mutantModel.enzymes(gene2modIndex);
+            if ~isempty(enzyme)
                 enzName    = ['prot_' enzyme{1}];
                 enzMetIndx = find(strcmpi(mutantModel.metNames,enzName));
                 enzKcats   = find(mutantModel.S(enzMetIndx,:));
