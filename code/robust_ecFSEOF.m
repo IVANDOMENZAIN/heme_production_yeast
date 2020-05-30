@@ -3,7 +3,7 @@ mkdir(resultsFolder)
 current      = pwd;
 tol          = 1E-12;
 OE           = 2;
-thresholds   = [0.05 5];
+thresholds   = [1E-2 1];
 % clone GECKO
 git ('clone https://github.com/SysBioChalmers/GECKO')
 cd GECKO
@@ -66,8 +66,8 @@ Yield = expYield;
 V_bio = Yield*CS_MW;
 tempModel.lb(growth_indx) = V_bio;
 %Fix unit C source uptake
-tempModel.lb(CUR_indx)    = (1-tol)*1;
-tempModel.ub(CUR_indx)    = (1+tol)*1;
+tempModel.lb(CUR_indx) = (1-tol)*1;
+tempModel.ub(CUR_indx) = (1+tol)*1;
 %Get and fix optimal production rate
 tempModel = setParam(tempModel, 'obj', targetIndx, +1);
 sol       = solveLP(tempModel,1);
@@ -122,7 +122,7 @@ tempModel.lb(targetIndx)  = 0;
 tempModel.ub(targetIndx)  = 1000;
 %set Max product formation as objective function
 tempModel = setParam(tempModel,'obj',targetIndx,+1);
-[~,~,FCs,validated]  = testAllmutants(candidates,tempModel,relIndexes,WT_prod_yield,1E-6);
+[~,~,FCs,validated]  = testAllmutants(candidates,tempModel,relIndexes,WT_prod_yield,1E-4);
 %Discard genes with a negative impact on production yield
 candidates.foldChange = FCs; 
 candidates            = candidates(validated,:);
@@ -150,7 +150,7 @@ disp(' ')
 priority = zeros(height(candidates),1);
 %%% 1st. unique=1 OEs with both min and pUsage>0 & Deletions with pUsage=0
 %unique Enzymes that are necesarily used
-cond1 = (candidates.actions>0 & candidates.pUsage>0 & candidates.minUsage>0);
+cond1 = (candidates.actions>0 & candidates.minUsage>0);
 %unique enzymes that are not used in a parsimonious simulation
 cond2   = (candidates.actions==0 & candidates.pUsage==0 & candidates.maxUsage>0);
 indexes = (candidates.unique==1 & (cond2 | cond1));
@@ -212,13 +212,13 @@ CUR_indx    = indexes(1);
 targetIndx  = indexes(2);
 medianUsage = (candidates.maxUsage-candidates.minUsage)/2; 
 %Index to minimize (bi-level optimization)
-minIndex    = find(contains(tempModel.rxnNames,'prot_pool'));
+minIndex = find(contains(tempModel.rxnNames,'prot_pool'));
 for i=1:height(candidates)
-    gene     = candidates.genes{i};
-    short    = candidates.shortNames{i};
-    action   = candidates.actions(i);
-    OEf      = candidates.OE(i);
-    modifications   = {gene action OEf};
+    gene   = candidates.genes{i};
+    short  = candidates.shortNames{i};
+    action = candidates.actions(i);
+    OEf    = candidates.OE(i);
+    modifications = {gene action OEf};
     if action == 0
         pUsage = medianUsage(i);
     else
@@ -235,7 +235,7 @@ for i=1:height(candidates)
     FoldChanges = [FoldChanges; FC];
     %disp(['Ready with genetic modification #' num2str(i) '[' short ': ' num2str(action) '] FC: ' num2str(FC)])
 end
-positive   = FoldChanges>(1-tol);
+positive   = FoldChanges>=(1-tol);
 [maxVal,I] = max(FoldChanges);
 if ~(maxVal>1)
     maxVal = [];
@@ -243,7 +243,7 @@ if ~(maxVal>1)
 else 
     TOPgene = candidates.genes{I};
     FC   = FoldChanges(I);
-    %disp(['candidate gene: ' short ' FC: ' num2str(FC)])
+    disp(['candidate gene: ' short ' FC: ' num2str(FC)])
 end
 end
 

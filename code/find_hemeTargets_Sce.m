@@ -6,6 +6,7 @@ cd ..
 clc
 %Load model
 load('../models/ecYeastGEM.mat')
+load('../models/ecYeastGEM_batch.mat')
 model = getHeme_ecYeastGEM(ecModel_batch);
 targetIndex = find(contains(model.rxnNames,'heme exchange'));
 %Set media conditions
