@@ -5,10 +5,9 @@ git checkout feat/add_FSEOF_utilities
 cd ..
 clc
 %Load model
-load('../models/ecYeastGEM.mat')
 load('../models/ecYeastGEM_batch.mat')
 model = getHeme_ecYeastGEM(ecModel_batch);
-targetIndex = find(contains(model.rxnNames,'heme exchange'));
+targetIndex = find(strcmpi(model.rxnNames,'heme exchange'));
 %Set media conditions
 cd GECKO/geckomat/kcat_sensitivity_analysis
 c_source = 'D-glucose exchange (reversible)';
@@ -26,7 +25,7 @@ tempModel = setParam(tempModel,'obj',growthPos,1);
 tempModel = setParam(tempModel,'ub',CS_index,1);
 solution  = solveLP(tempModel,1);
 WT_yield  = solution.x(growthPos)/(solution.x(CS_index)*CS_MW);
-disp(['The biomass yield is ' num2str(WT_yield) '[g biomass/g carbon source]']);
+disp(['The maximum biomass yield is ' num2str(WT_yield) '[g biomass/g carbon source]']);
 resultsFolder = '../results/ecModel_targets';
 mkdir(resultsFolder)
 expYield = 0.122;

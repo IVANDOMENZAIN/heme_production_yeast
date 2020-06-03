@@ -35,7 +35,7 @@ if ~isempty(sol.x)
                 model   = setParam(model, 'obj', rxnIndx, +1);
                 sol     = solveLP(model);
                 if ~isempty(sol.f)
-                   disp(['Ready with enzyme #' num2str(i)])
+                   %disp(['Ready with enzyme #' num2str(i)])
                    maxFlux = sol.x(rxnIndx); 
                 else
                    maxFlux = nan; 
