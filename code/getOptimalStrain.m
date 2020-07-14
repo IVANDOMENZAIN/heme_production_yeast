@@ -33,7 +33,7 @@ for i=[1 2 3]
             yield = mutSol(targetIndex)/(mutSol(GURindex)*CS_MW);
             FC    = yield/WTyield;
             %Just keep those genes that don't affect the production phenotype
-            if (FC-previousFC)>-1E-6
+            if (FC-previousFC)>=-1E-3
                 FChanges   = [FChanges; FC];
                 genesFC    = [genesFC;gene];
                 optStrain  = tempMutant;

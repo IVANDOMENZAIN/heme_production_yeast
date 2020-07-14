@@ -1,7 +1,7 @@
 function [mutantStrain,filtered] = robust_ecFSEOF(model,rxnTarget,expYield,CS_MW,resultsFolder)
 mkdir(resultsFolder)
 current      = pwd;
-tol          = 1E-12;
+tol          = 1E-6;
 OE           = 2;
 thresholds   = [1E-2 1];
 % clone GECKO
@@ -118,7 +118,7 @@ disp('Mechanistic validation of results')
 %Relevant rxn indexes
 relIndexes = [CUR_indx, targetIndx];
 %relax target rxn bounds
-tempModel.lb(targetIndx)  = 0;
+%tempModel.lb(targetIndx)  = 0;
 tempModel.ub(targetIndx)  = 1000;
 %set Max product formation as objective function
 tempModel = setParam(tempModel,'obj',targetIndx,+1);
