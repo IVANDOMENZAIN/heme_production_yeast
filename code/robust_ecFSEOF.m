@@ -99,10 +99,10 @@ candidates.minUsage = FVAtable.minU;
 candidates.maxUsage = FVAtable.maxU;
 candidates.pUsage   = candidateUsages;
 %Generate table with FVA results
-t = table(candidates.enzymes,FVAtable.minU,FVAtable.maxU,FVAtable.ranges,candidateUsages,candidates.actions,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages' 'actions'});
+t = table(candidates.enzymes,FVAtable.minU,FVAtable.maxU,FVAtable.ranges,candidateUsages,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages'});
 writetable(candidates,[resultsFolder '/candidates_enzUsageFVA.txt'],'Delimiter','\t','QuoteStrings',false);
 %Discard enzymes whose usage LB = UB = 0
-tempMat  = table2array(t(:,[2 3 6]));
+tempMat  = table2array(t(:,[2 3]));
 unused   = find(sum(tempMat,2)==0);
 toRemove = intersect(unused,find(candidates.actions>0));
 candidates(toRemove,:) = [];
@@ -116,9 +116,6 @@ relIndexes = [CUR_indx, targetIndx];
 %relax target rxn bounds
 tempModel.lb(targetIndx) = (1-tol)*WT_prod;
 tempModel.ub(targetIndx) = 1000;
-% %Fix unit C source uptake
-%tempModel.lb(CUR_indx) = 0;
-% tempModel.ub(CUR_indx) = 1000;
 %set Max product formation as objective function
 tempModel = setParam(tempModel,'obj',targetIndx,+1);
 %Run mechanistic validation of targets
