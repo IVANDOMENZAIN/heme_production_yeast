@@ -1,12 +1,18 @@
-function [optStrain,optGenes,FChanges,iB] = getOptimalStrain(model,candidates,rxnIndxs,CS_MW)
+function [optStrain,optGenes,FChanges,iB] = getOptimalStrain(model,candidates,rxnIndxs,protFlag)
 %Get WT yield
-sol = solveLP(model,1);
-if ~isempty(sol.x)
-    targetIndex = rxnIndxs(1);
-    GURindex    = rxnIndxs(2);
-    WTyield     = sol.x(targetIndex)/(sol.x(GURindex)*CS_MW);
+targetIndex = rxnIndxs(1);
+GURindex    = rxnIndxs(2);
+prot_index  = rxnIndxs(3);
+[sol,flag]  = solveECmodel(model,model,'pFBA',prot_index);
+if flag
+    if protFlag
+        minIndex = prot_index;
+    else
+        minIndex = GURindex;
+    end
+    WTyield = sol(targetIndex)/(sol(minIndex));
 end
-medianUsage = (candidates.maxUsage-candidates.minUsage)/2; 
+medianUsage = (candidates.maxUsage-candidates.minUsage)/2.001; 
 %Create mutants iteratively
 optStrain  = model;
 FChanges   = [];
@@ -18,31 +24,37 @@ for i=[1 2 3]
     levelCandidates = sortrows(levelCandidates,'foldChange','descend');
     for j=1:length(levelCandidates.genes)
         gene   = levelCandidates.genes{j};
-        short  = levelCandidates.shortNames(j);
+        enzyme = levelCandidates.enzymes{j};
+        enzRxn = find(contains(optStrain.rxnNames,['prot_' enzyme]));
+        fluxE  = haveFlux(optStrain,1E-18,enzRxn);
+        short  = levelCandidates.shortNames{j};
         action = levelCandidates.actions(j);
+        maxUse = levelCandidates.maxUsage(j);
         OEf    = levelCandidates.OE(j);
-        modifications = {gene action OEf};
-        if action == 0
-            enzUsage = medianUsage(i);
-        else
-            enzUsage = [];
-        end
-        tempMutant    = getMutant(optStrain,modifications,enzUsage);
-        [mutSol,~]    = solveECmodel(tempMutant,model,'pFBA',GURindex);
-        if ~isempty(mutSol)
-            yield = mutSol(targetIndex)/(mutSol(GURindex)*CS_MW);
-            FC    = yield/WTyield;
-            %Just keep those genes that don't affect the production phenotype
-            if (FC-previousFC)>=-1E-3
-                FChanges   = [FChanges; FC];
-                genesFC    = [genesFC;gene];
-                optStrain  = tempMutant;
-                previousFC = FC;
-                counter = counter+1;
-                %disp(['Ready with gene #' num2str(counter) ' (' short{1} ')' '  FC:' num2str(FC)])
+        %Avoid including enzymes that cannot carry any flux 
+        if ~(~fluxE & maxUse>0)
+            modifications = {gene action OEf};
+            if action == 0
+                enzUsage = candidates.maxUsage(i);
+            else
+                enzUsage = medianUsage(i);
             end
-        else
-            FC = 0;
+            tempMutant = getMutant(optStrain,modifications,enzUsage);
+            [mutSol,~] = solveECmodel(tempMutant,model,'pFBA',minIndex);
+            
+            if ~isempty(mutSol)
+                yield = mutSol(targetIndex)/(mutSol(minIndex));
+                FC    = yield/WTyield;
+                %Just keep those genes that don't affect the production phenotype
+                if FC >= (previousFC-1E-12)
+                    FChanges   = [FChanges; FC];
+                    genesFC    = [genesFC;gene];
+                    optStrain  = tempMutant;
+                    previousFC = FC;
+                    counter = counter+1;
+                    disp(['Ready with gene #' num2str(counter) ' (' short ')' '  FC:' num2str(FC)])
+                end
+            end
         end
     end
 end

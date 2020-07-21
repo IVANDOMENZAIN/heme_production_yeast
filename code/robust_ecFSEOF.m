@@ -1,7 +1,7 @@
 function [mutantStrain,filtered] = robust_ecFSEOF(model,rxnTarget,expYield,CS_MW,resultsFolder)
 mkdir(resultsFolder)
 current      = pwd;
-tol          = 1E-6;
+tol          = 1E-15;
 OE           = 2;
 thresholds   = [1E-2 1];
 % clone GECKO
@@ -22,8 +22,8 @@ file2   = 'results/rxnsResults_ecFSEOF.txt';
 % Run FSEOF to find gene candidates
 cd utilities/ecFSEOF
 mkdir('results')
-results    = run_ecFSEOF(model,rxnTarget,c_source,alphaLims,Nsteps,file1,file2);
-genes      = results.genes;
+results = run_ecFSEOF(model,rxnTarget,c_source,alphaLims,Nsteps,file1,file2);
+genes   = results.genes;
 disp(['ecFSEOF yielded ' num2str(length(genes)) ' targets'])
 disp(' ')
 %Format results table
@@ -61,6 +61,7 @@ tempModel   = model;
 targetIndx  = find(strcmpi(tempModel.rxns,rxnTarget));
 CUR_indx    = find(strcmpi(tempModel.rxnNames,c_source));
 growth_indx = find(strcmpi(tempModel.rxns,bioRXN));
+prot_indx = find(contains(tempModel.rxns,'prot_pool'));
 %Fix suboptimal experimental biomass yield conditions
 Yield = expYield;
 V_bio = Yield*CS_MW;
@@ -81,32 +82,27 @@ WT_prod_yield = WT_prod/WT_CUR;
 disp('Running enzyme usage variability analysis')
 FVAtable = enzymeUsage_FVA(tempModel,candidates.enzymes);
 candidateUsages = FVAtable.pU;
-minUsages       = FVAtable.minU;
-maxUsages       = FVAtable.maxU;
 %Classify overexpression types
 for i=1:length(candidates.enzymes)
-    %Enzymes that are more tightly constrained are classified as candidates
-    %for overexpression by modification on Kcats
-    if maxUsages(i)~=0 && candidates.actions(i)>0
+    if FVAtable.maxU(i)~=0 && candidates.actions(i)>0
         candidates.actions(i) = 1;
-        %Enzymes for "room" for direct overexpression (operate on enzyme
-        %usage lb)
-        if maxUsages(i)< OE*candidateUsages(i)
+        %Enzymes that are more tightly constrained are classified as candidates
+        %for overexpression by modification on Kcats
+        if FVAtable.maxU(i)< OE*candidateUsages(i)
             candidates.actions(i) = 2;
         end 
     end
 end
 candidates.OE(candidates.actions>0)  = OE;
 candidates.OE(candidates.actions==0) = 0;
-candidates.minUsage = minUsages;
-candidates.maxUsage = maxUsages;
-candidates.pUsage   = candidateUsages;
+candidates.minUsage = FVAtable.minU;
+candidates.maxUsage = FVAtable.maxU;
 candidates.pUsage   = candidateUsages;
 %Generate table with FVA results
-t = table(candidates.enzymes,minUsages,maxUsages,FVAtable.ranges,candidateUsages,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages'});
+t = table(candidates.enzymes,FVAtable.minU,FVAtable.maxU,FVAtable.ranges,candidateUsages,candidates.actions,'VariableNames',{'enzNames' 'minUsages' 'maxUsages' 'ranges' 'pUsages' 'actions'});
 writetable(candidates,[resultsFolder '/candidates_enzUsageFVA.txt'],'Delimiter','\t','QuoteStrings',false);
 %Discard enzymes whose usage LB = UB = 0
-tempMat  = table2array(t(:,2:3));
+tempMat  = table2array(t(:,[2 3 6]));
 unused   = find(sum(tempMat,2)==0);
 toRemove = intersect(unused,find(candidates.actions>0));
 candidates(toRemove,:) = [];
@@ -118,11 +114,15 @@ disp('Mechanistic validation of results')
 %Relevant rxn indexes
 relIndexes = [CUR_indx, targetIndx];
 %relax target rxn bounds
-%tempModel.lb(targetIndx)  = 0;
-tempModel.ub(targetIndx)  = 1000;
+tempModel.lb(targetIndx) = (1-tol)*WT_prod;
+tempModel.ub(targetIndx) = 1000;
+% %Fix unit C source uptake
+%tempModel.lb(CUR_indx) = 0;
+% tempModel.ub(CUR_indx) = 1000;
 %set Max product formation as objective function
 tempModel = setParam(tempModel,'obj',targetIndx,+1);
-[~,~,FCs,validated]  = testAllmutants(candidates,tempModel,relIndexes,WT_prod_yield,1E-4);
+%Run mechanistic validation of targets
+[~,~,FCs,validated]  = testAllmutants(candidates,tempModel,relIndexes,WT_prod_yield);
 %Discard genes with a negative impact on production yield
 candidates.foldChange = FCs; 
 candidates            = candidates(validated,:);
@@ -140,24 +140,28 @@ candidates.unique = indGenes;
 candidates.conectivity = Gconect.mets_number;
 [~,groups]        = getGenesGroups(G2Gmatrix,candidates.genes);
 candidates.groups = groups;
-
 % Rank candidates by priority
 disp('Ranking gene targets by priority level:')
-disp('  1.- Candidates for OE with pUsage>0')
-disp('  1.- Candidates for del with pUsage=0 and maxUsage>0')
-disp('  2.- Isoenzymes with the lowest MW for a metabolic rxn')
+disp('  1.- Unique genes candidates for OE with pUsage>0')
+disp('  1.- Unique genes candidates for del with pUsage=0 and maxUsage>0')
+disp('  2.- Isoenzymes candidates for OE with the lowest MW for a metabolic rxn')
+disp('  2.- Groups of isoenzymes candidates for deletion with all pUsage=0')
+disp('  3.- The heaviest enzymes in a group of isoenzymes candidates for deletion and at least one pUsage>0')
 disp(' ')
 priority = zeros(height(candidates),1);
 %%% 1st. unique=1 OEs with both min and pUsage>0 & Deletions with pUsage=0
 %unique Enzymes that are necesarily used
 cond1 = (candidates.actions>0 & candidates.minUsage>0);
 %unique enzymes that are not used in a parsimonious simulation
-cond2   = (candidates.actions==0 & candidates.pUsage==0 & candidates.maxUsage>0);
+cond2   = (candidates.actions==0 & candidates.pUsage==0);
 indexes = (candidates.unique==1 & (cond2 | cond1));
 priority(indexes) = 1; 
 %%% 2nd. unique=0, for OEs pick the enzyme with the lowest MW for each group, these 
 % are usually isoenzymes, therefore the lowest protein burden impact is
-% desired
+% desired. For deletions assign 2 to groups of isoenzymes in which none of
+% them is used. For groups of isoenzymes candidates for deletions in which 
+% there are used enzymes in the parsimonious distribution then delete the
+% non-used ones.
 for i=1:max(candidates.groups)
     %Find group genes
     groupIndxs = find(candidates.groups==i);
@@ -177,7 +181,7 @@ for i=1:max(candidates.groups)
             groupGenes = groupTable.genes(minMW);
             if ~isempty(groupGenes)                
                 prtyIndx   = (strcmpi(candidates.genes,groupGenes));
-                priority(prtyIndx) = 1;
+                priority(prtyIndx) = 2;
             end
         end
     end
@@ -185,15 +189,15 @@ end
 candidates.priority = priority;
 %Keep priority genes and sort them accordingly
 candidates = candidates(priority>0,:);
-disp('Discard genes with priority level = 0 ')
+disp('Discard genes with priority level = 0')
 disp([num2str(height(candidates)) ' gene targets remain'])
 disp(' ')
 candidates = sortrows(candidates,'priority','ascend');
 writetable(candidates,[resultsFolder '/candidates_priority.txt'],'Delimiter','\t','QuoteStrings',false);
 % get optimal strain according to priority candidates
 disp('Constructing optimal strain')
-[~,filtered] = getOptimalStrain(tempModel,candidates,[targetIndx CUR_indx],CS_MW);
-[mutantStrain,filtered,] = getOptimalStrain(tempModel,filtered,[targetIndx CUR_indx],CS_MW);
+[~,filtered] = getOptimalStrain(tempModel,candidates,[targetIndx CUR_indx prot_indx],false);
+[mutantStrain,filtered,] = getOptimalStrain(tempModel,filtered,[targetIndx CUR_indx prot_indx],false);
 cd (current)
 actions = cell(height(filtered),1);
 actions(filtered.actions==0)= {'deletion'};
@@ -207,10 +211,13 @@ copyfile(origin,resultsFolder)
 end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function [maxVal,TOPgene,FoldChanges,positive] = testAllmutants(candidates,tempModel,indexes,WTval,tol)
+if nargin<5
+    tol = 0;
+end
 FoldChanges = [];
 CUR_indx    = indexes(1);
 targetIndx  = indexes(2);
-medianUsage = (candidates.maxUsage-candidates.minUsage)/2; 
+medianUsage = (candidates.maxUsage-candidates.minUsage)/2.001; 
 %Index to minimize (bi-level optimization)
 minIndex = find(contains(tempModel.rxnNames,'prot_pool'));
 for i=1:height(candidates)
@@ -220,9 +227,9 @@ for i=1:height(candidates)
     OEf    = candidates.OE(i);
     modifications = {gene action OEf};
     if action == 0
-        pUsage = medianUsage(i);
+        pUsage = candidates.maxUsage(i);
     else
-        pUsage = [];
+        pUsage = medianUsage(i);
     end
     mutantModel     = getMutant(tempModel,modifications,pUsage);
     [mutSolution,~] = solveECmodel(mutantModel,mutantModel,'pFBA',minIndex);
@@ -235,9 +242,9 @@ for i=1:height(candidates)
     FoldChanges = [FoldChanges; FC];
     %disp(['Ready with genetic modification #' num2str(i) '[' short ': ' num2str(action) '] FC: ' num2str(FC)])
 end
-positive   = FoldChanges>=(1-tol);
+positive   = FoldChanges>(1-tol);
 [maxVal,I] = max(FoldChanges);
-if ~(maxVal>1)
+if ~(maxVal>=1)
     maxVal = [];
     gene   = [];
 else 

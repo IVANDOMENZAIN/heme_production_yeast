@@ -20,11 +20,11 @@ function [mutSolution,flag] = solveECmodel(mutant,model,method,prots,tol)
 %
 % Usage: [mutSolution,flag] = solveECmodel(mutant,model,method,prots)
 %
-% Last modified.  Ivan Domenzain 2019-10-11
+% Last modified.  Ivan Domenzain 2020-07-16
 %
 
 if nargin<5
-    tol = 1E-12;
+    tol = 1E-15;
 end
 
 minFlag = false;
